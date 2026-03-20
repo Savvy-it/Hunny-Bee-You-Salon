@@ -1,0 +1,159 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: services
+    // Fields: name (string), price (number), duration (string), description (string)
+    //
+    // Collection: appointments
+    // Fields: client_name (string), client_email (string), client_phone (string), 
+    //         service_id (string), services (list), duration (int), total_price (number), 
+    //         consent (bool), date (string), time (string), image_url (string), 
+    //         status (string), notes (string)
+    //
+    // Collection: gallery
+    // Fields: url (string), caption (string)
+    //
+    // Collection: events
+    // Fields: title (string), date (string), time (string), description (string), capacity (int)
+    //
+    // Collection: events/{eventId}/registrations
+    // Fields: event_id (string), name (string), email (string)
+    //
+    // Collection: business_hours
+    // Fields: day (string), open_time (string), close_time (string), is_closed (bool)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "ikemirerenee@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidService(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.price is number && data.price >= 0 &&
+             (!('duration' in data) || data.duration is string) &&
+             (!('description' in data) || data.description is string);
+    }
+
+    function isValidAppointment(data) {
+      return data.client_name is string && data.client_name.size() > 0 && data.client_name.size() < 100 &&
+             data.client_email is string && isValidEmail(data.client_email) &&
+             (!('client_phone' in data) || data.client_phone is string) &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.time is string && data.time.matches("^\\d{2}:\\d{2}$") &&
+             (!('status' in data) || data.status in ['pending', 'confirmed', 'cancelled']) &&
+             (!('services' in data) || data.services is list) &&
+             (!('total_price' in data) || data.total_price is number) &&
+             (!('duration' in data) || data.duration is int) &&
+             (!('consent' in data) || data.consent is bool);
+    }
+
+    function isValidGalleryImage(data) {
+      return data.url is string && data.url.matches("^https?://.*") &&
+             (!('caption' in data) || data.caption is string);
+    }
+
+    function isValidEvent(data) {
+      return data.title is string && data.title.size() > 0 &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.time is string && data.time.matches("^\\d{2}:\\d{2}$") &&
+             data.capacity is int && data.capacity >= 0;
+    }
+
+    function isValidRegistration(data) {
+      return data.event_id is string &&
+             data.name is string && data.name.size() > 0 &&
+             data.email is string && isValidEmail(data.email);
+    }
+
+    function isValidBusinessHours(data) {
+      return data.day is string &&
+             (!('open_time' in data) || data.open_time.matches("^\\d{2}:\\d{2}$")) &&
+             (!('close_time' in data) || data.close_time.matches("^\\d{2}:\\d{2}$")) &&
+             (!('is_closed' in data) || data.is_closed is bool);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /services/{serviceId} {
+      allow read: if true;
+      allow create, update: if isAdmin() && isValidService(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if isAdmin();
+      allow create: if isValidAppointment(request.resource.data);
+      allow update: if isAdmin() && isValidAppointment(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /gallery/{imageId} {
+      allow read: if true;
+      allow create, update: if isAdmin() && isValidGalleryImage(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /events/{eventId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidEvent(request.resource.data);
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['registration_count']) &&
+        request.resource.data.registration_count == resource.data.registration_count + 1
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /event_registrations/{registrationId} {
+      allow read: if isAdmin();
+      allow create: if isValidRegistration(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+
+    match /business_hours/{day} {
+      allow read: if true;
+      allow create, update: if isAdmin() && isValidBusinessHours(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

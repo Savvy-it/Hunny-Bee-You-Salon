@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Component } from 'react';
 import { motion, AnimatePresence, useScroll, useTransform, useSpring } from 'motion/react';
 import { 
   format, 
@@ -53,6 +53,28 @@ import {
 } from 'lucide-react';
 import { Service, BusinessHours, Appointment, SalonEvent, GalleryImage } from './types';
 import { generateEmailDraft, generateServiceDescription } from './services/geminiService';
+import { 
+  db, 
+  auth, 
+  collection, 
+  doc, 
+  setDoc, 
+  addDoc, 
+  getDoc, 
+  getDocs, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where, 
+  orderBy,
+  Timestamp,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  handleFirestoreError,
+  OperationType
+} from './firebase';
 
 import { GoogleGenAI, Modality } from "@google/genai";
 
@@ -67,6 +89,69 @@ const format12h = (time24: string) => {
 };
 
 // --- Components ---
+
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: any;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState;
+  props: ErrorBoundaryProps;
+
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let errorMessage = "Something went wrong.";
+      try {
+        const parsedError = JSON.parse(this.state.error.message);
+        if (parsedError.error) {
+          errorMessage = `Firestore Error: ${parsedError.error} during ${parsedError.operationType} on ${parsedError.path}`;
+        }
+      } catch (e) {
+        errorMessage = this.state.error.message || String(this.state.error);
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-stone-50 p-4">
+          <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center border border-stone-200">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <X className="w-8 h-8 text-red-600" />
+            </div>
+            <h2 className="text-2xl font-serif font-medium text-stone-900 mb-4">Application Error</h2>
+            <p className="text-stone-600 mb-8 leading-relaxed">
+              {errorMessage}
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full py-3 px-6 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 transition-colors"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const Navbar = ({ activeTab, setActiveTab, isAdmin, setIsAdmin, onLogout }: { 
   activeTab: string, 
@@ -806,15 +891,23 @@ const GalleryPage = ({ images }: { images: GalleryImage[] }) => {
 };
 
 const AdminLoginPage = ({ onLogin }: { onLogin: () => void }) => {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === 'Iamthe0wner') {
+    setLoading(true);
+    setError('');
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
       onLogin();
-    } else {
-      setError('Incorrect password. Please try again.');
+    } catch (err: any) {
+      console.error("Login error:", err);
+      setError('Invalid email or password. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -830,10 +923,21 @@ const AdminLoginPage = ({ onLogin }: { onLogin: () => void }) => {
             <Lock size={32} />
           </div>
           <h2 className="text-3xl font-serif text-bee-purple">Owner Login</h2>
-          <p className="text-bee-white/50 text-sm mt-2">Enter your password to access the dashboard</p>
+          <p className="text-bee-white/50 text-sm mt-2">Enter your credentials to access the dashboard</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="space-y-2">
+            <label className="text-xs font-bold uppercase tracking-widest text-bee-white/30">Email</label>
+            <input 
+              type="email" 
+              required
+              className="w-full p-4 rounded-xl bg-bee-white/5 border border-bee-white/10 focus:border-bee-purple outline-none transition-all text-bee-white"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="owner@example.com"
+            />
+          </div>
           <div className="space-y-2">
             <label className="text-xs font-bold uppercase tracking-widest text-bee-white/30">Password</label>
             <input 
@@ -848,8 +952,11 @@ const AdminLoginPage = ({ onLogin }: { onLogin: () => void }) => {
           
           {error && <p className="text-bee-blue text-xs font-bold">{error}</p>}
 
-          <button className="w-full rainbow-bg text-bee-black py-4 rounded-xl font-bold hover:scale-[1.02] transition-all shadow-xl">
-            Access Dashboard
+          <button 
+            disabled={loading}
+            className="w-full rainbow-bg text-bee-black py-4 rounded-xl font-bold hover:scale-[1.02] transition-all shadow-xl disabled:opacity-50"
+          >
+            {loading ? 'Authenticating...' : 'Access Dashboard'}
           </button>
         </form>
       </motion.div>
@@ -968,7 +1075,7 @@ const BOOKING_SERVICES = [
   { name: 'Other Service', duration: 30, price: 0 },
 ];
 
-const BookingPage = ({ services: _services, onComplete }: { services: Service[], onComplete: () => void }) => {
+const BookingPage = ({ services: _services, hours, onComplete }: { services: Service[], hours: BusinessHours[], onComplete: () => void }) => {
   const [step, setStep] = useState(1);
   const [availableSlots, setAvailableSlots] = useState<string[]>([]);
   const [formData, setFormData] = useState({
@@ -995,30 +1102,76 @@ const BookingPage = ({ services: _services, onComplete }: { services: Service[],
 
   useEffect(() => {
     if (formData.date && totalDuration > 0) {
-      fetch(`/api/available-slots?date=${formData.date}&duration=${totalDuration}`)
-        .then(res => {
-          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-          return res.json();
-        })
-        .then(data => setAvailableSlots(data))
-        .catch(err => console.error("Error fetching available slots:", err));
+      // Replicating slot logic on client side for now
+      // In a real app, this might be a cloud function
+      const checkAvailability = async () => {
+        const path = 'appointments';
+        try {
+          const q = query(collection(db, path), where('date', '==', formData.date));
+          const snapshot = await getDocs(q);
+          const dayAppointments = snapshot.docs.map(doc => doc.data() as Appointment);
+          
+          const dayName = format(parseISO(formData.date), 'EEEE');
+          const dayHours = hours.find(h => h.day === dayName);
+          
+          if (!dayHours || dayHours.is_closed) {
+            setAvailableSlots([]);
+            return;
+          }
+
+          const slots: string[] = [];
+          const [openH, openM] = dayHours.open_time.split(':').map(Number);
+          const [closeH, closeM] = dayHours.close_time.split(':').map(Number);
+          
+          let current = new Date(formData.date);
+          current.setHours(openH, openM, 0, 0);
+          
+          const end = new Date(formData.date);
+          end.setHours(closeH, closeM, 0, 0);
+
+          while (current.getTime() + totalDuration * 60000 <= end.getTime()) {
+            const timeStr = format(current, 'HH:mm');
+            
+            const isOverlapping = dayAppointments.some(apt => {
+              const aptStart = new Date(`${apt.date}T${apt.time}`);
+              const aptEnd = new Date(aptStart.getTime() + apt.duration * 60000);
+              const newStart = new Date(`${formData.date}T${timeStr}`);
+              const newEnd = new Date(newStart.getTime() + totalDuration * 60000);
+              
+              return (newStart < aptEnd && newEnd > aptStart);
+            });
+
+            if (!isOverlapping) {
+              slots.push(timeStr);
+            }
+            current = addDays(current, 0); // just to be safe, but we're changing hours
+            current.setMinutes(current.getMinutes() + 30);
+          }
+          setAvailableSlots(slots);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.GET, path);
+        }
+      };
+      
+      checkAvailability();
     }
-  }, [formData.date, totalDuration]);
+  }, [formData.date, totalDuration, hours]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/appointments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const path = 'appointments';
+    try {
+      await addDoc(collection(db, path), {
         ...formData,
         duration: totalDuration,
-        totalPrice: totalPrice
-      })
-    });
-    if (res.ok) {
+        totalPrice: totalPrice,
+        status: 'pending',
+        createdAt: Timestamp.now()
+      });
       setStep(4);
       setTimeout(onComplete, 3000);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
     }
   };
 
@@ -1312,25 +1465,39 @@ const BookingPage = ({ services: _services, onComplete }: { services: Service[],
 };
 
 const EventsPage = ({ events }: { events: SalonEvent[] }) => {
-  const [registering, setRegistering] = useState<number | null>(null);
+  const [registering, setRegistering] = useState<string | null>(null);
   const [regData, setRegData] = useState({ name: '', email: '' });
   const [success, setSuccess] = useState(false);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!registering) return;
-    const res = await fetch(`/api/events/${registering}/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(regData)
-    });
-    if (res.ok) {
-      setSuccess(true);
-      setTimeout(() => {
-        setRegistering(null);
-        setSuccess(false);
-        setRegData({ name: '', email: '' });
-      }, 2000);
+    const path = 'event_registrations';
+    try {
+      const res = await addDoc(collection(db, path), {
+        eventId: registering,
+        ...regData,
+        createdAt: Timestamp.now()
+      });
+      
+      if (res.id) {
+        // Update registration count on event
+        const eventRef = doc(db, 'events', registering);
+        const eventSnap = await getDoc(eventRef);
+        if (eventSnap.exists()) {
+          await updateDoc(eventRef, {
+            registration_count: (eventSnap.data().registration_count || 0) + 1
+          });
+        }
+        setSuccess(true);
+        setTimeout(() => {
+          setRegistering(null);
+          setSuccess(false);
+          setRegData({ name: '', email: '' });
+        }, 2000);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
     }
   };
 
@@ -1443,13 +1610,32 @@ const AdminDashboard = ({
   const [editingService, setEditingService] = useState<Service | null>(null);
 
   useEffect(() => {
-    fetch('/api/dashboard/stats')
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
-      .then(data => setStats(data))
-      .catch(err => console.error("Error fetching stats:", err));
+    if (appointments.length > 0) {
+      const totalRevenue = appointments.reduce((acc, apt) => acc + (apt.totalPrice || 0), 0);
+      const totalAppointments = appointments.length;
+      const uniqueEmails = new Set(appointments.map(a => a.client_email)).size;
+      
+      // Simple daily stats
+      const dailyMap = new Map();
+      appointments.forEach(apt => {
+        const date = apt.date;
+        const current = dailyMap.get(date) || { date, count: 0, revenue: 0 };
+        current.count += 1;
+        current.revenue += (apt.totalPrice || 0);
+        dailyMap.set(date, current);
+      });
+      
+      const dailyStats = Array.from(dailyMap.values())
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, 7);
+
+      setStats({
+        totalRevenue,
+        totalAppointments,
+        newClients: uniqueEmails,
+        dailyStats
+      });
+    }
   }, [appointments]);
 
   const activeAppointments = appointments.filter(apt => {
@@ -1459,27 +1645,33 @@ const AdminDashboard = ({
     return aptDate >= today;
   });
 
-  const handleDeleteAppointment = async (id: number) => {
+  const handleDeleteAppointment = async (id: string) => {
     if (confirm('Delete this appointment?')) {
-      await fetch(`/api/appointments/${id}`, { method: 'DELETE' });
-      onRefresh();
+      const path = `appointments/${id}`;
+      try {
+        await deleteDoc(doc(db, 'appointments', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, path);
+      }
     }
   };
 
   const handleGenerateDraft = async (apt: Appointment) => {
     const draft = await generateEmailDraft(apt.client_name, apt.date, apt.service_name || 'Hair Service');
-    setEmailDraft({ id: apt.id, text: draft || '' });
+    setEmailDraft({ id: apt.id as any, text: draft || '' });
   };
 
   const handleSaveNotes = async () => {
     if (!editingNotes) return;
-    await fetch(`/api/appointments/${editingNotes.id}/notes`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: editingNotes.notes })
-    });
-    setEditingNotes(null);
-    onRefresh();
+    const path = `appointments/${editingNotes.id}`;
+    try {
+      await updateDoc(doc(db, 'appointments', editingNotes.id as any), {
+        notes: editingNotes.notes
+      });
+      setEditingNotes(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
   };
 
   const handleAddService = () => {
@@ -1494,33 +1686,48 @@ const AdminDashboard = ({
     e.preventDefault();
     if (!editingService) return;
     
-    const method = editingService.id ? 'PUT' : 'POST';
-    const url = editingService.id ? `/api/services/${editingService.id}` : '/api/services';
-    
-    await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingService)
-    });
-    setEditingService(null);
-    onRefresh();
+    const path = editingService.id ? `services/${editingService.id}` : 'services';
+    try {
+      if (editingService.id) {
+        await updateDoc(doc(db, 'services', editingService.id as any), {
+          name: editingService.name,
+          price: editingService.price,
+          duration: editingService.duration,
+          description: editingService.description
+        });
+      } else {
+        await addDoc(collection(db, 'services'), {
+          ...editingService,
+          createdAt: Timestamp.now()
+        });
+      }
+      setEditingService(null);
+    } catch (err) {
+      handleFirestoreError(err, editingService.id ? OperationType.UPDATE : OperationType.WRITE, path);
+    }
   };
 
-  const handleDeleteService = async (id: number) => {
+  const handleDeleteService = async (id: string) => {
     if (confirm('Delete this service?')) {
-      await fetch(`/api/services/${id}`, { method: 'DELETE' });
-      onRefresh();
+      const path = `services/${id}`;
+      try {
+        await deleteDoc(doc(db, 'services', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, path);
+      }
     }
   };
 
   const handleUpdateHours = async () => {
-    await fetch('/api/hours', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hours })
-    });
-    alert('Business hours updated successfully!');
-    onRefresh();
+    const path = 'business_hours';
+    try {
+      await Promise.all(hours.map(h => 
+        setDoc(doc(db, 'business_hours', h.day), h)
+      ));
+      alert('Business hours updated successfully!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
   };
 
   const handleGalleryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1529,21 +1736,29 @@ const AdminDashboard = ({
       const reader = new FileReader();
       reader.onloadend = async () => {
         const caption = prompt('Enter a caption for this image:');
-        await fetch('/api/gallery', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: reader.result as string, caption })
-        });
-        onRefresh();
+        const path = 'gallery';
+        try {
+          await addDoc(collection(db, path), {
+            url: reader.result as string,
+            caption,
+            createdAt: Timestamp.now()
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, path);
+        }
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleDeleteGallery = async (id: number) => {
+  const handleDeleteGallery = async (id: string) => {
     if (confirm('Delete this image from gallery?')) {
-      await fetch(`/api/gallery/${id}`, { method: 'DELETE' });
-      onRefresh();
+      const path = `gallery/${id}`;
+      try {
+        await deleteDoc(doc(db, 'gallery', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, path);
+      }
     }
   };
 
@@ -1601,17 +1816,27 @@ const AdminDashboard = ({
     e.preventDefault();
     if (!editingEvent) return;
     
-    const method = editingEvent.id ? 'PUT' : 'POST';
-    const url = editingEvent.id ? `/api/events/${editingEvent.id}` : '/api/events';
-    
-    await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingEvent)
-    });
-    
-    setEditingEvent(null);
-    onRefresh();
+    const path = editingEvent.id ? `events/${editingEvent.id}` : 'events';
+    try {
+      if (editingEvent.id) {
+        await updateDoc(doc(db, 'events', editingEvent.id as any), {
+          title: editingEvent.title,
+          date: editingEvent.date,
+          time: editingEvent.time,
+          capacity: editingEvent.capacity,
+          description: editingEvent.description
+        });
+      } else {
+        await addDoc(collection(db, 'events'), {
+          ...editingEvent,
+          registration_count: 0,
+          createdAt: Timestamp.now()
+        });
+      }
+      setEditingEvent(null);
+    } catch (err) {
+      handleFirestoreError(err, editingEvent.id ? OperationType.UPDATE : OperationType.WRITE, path);
+    }
   };
 
   return (
@@ -1951,13 +2176,13 @@ const AdminDashboard = ({
                           <input 
                             type="time" 
                             defaultValue={h.open_time} 
-                            onBlur={(e) => {
-                              const newHours = hours.map(item => item.day === h.day ? { ...item, open_time: e.target.value } : item);
-                              fetch('/api/hours', {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ hours: newHours })
-                              }).then(() => onRefresh());
+                            onBlur={async (e) => {
+                              const path = `business_hours/${h.day}`;
+                              try {
+                                await updateDoc(doc(db, 'business_hours', h.day), { open_time: e.target.value });
+                              } catch (error) {
+                                handleFirestoreError(error, OperationType.UPDATE, path);
+                              }
                             }}
                             className="p-2 rounded-lg border border-bee-white/10 bg-bee-black text-bee-white text-sm" 
                           />
@@ -1965,13 +2190,13 @@ const AdminDashboard = ({
                           <input 
                             type="time" 
                             defaultValue={h.close_time} 
-                            onBlur={(e) => {
-                              const newHours = hours.map(item => item.day === h.day ? { ...item, close_time: e.target.value } : item);
-                              fetch('/api/hours', {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ hours: newHours })
-                              }).then(() => onRefresh());
+                            onBlur={async (e) => {
+                              const path = `business_hours/${h.day}`;
+                              try {
+                                await updateDoc(doc(db, 'business_hours', h.day), { close_time: e.target.value });
+                              } catch (error) {
+                                handleFirestoreError(error, OperationType.UPDATE, path);
+                              }
                             }}
                             className="p-2 rounded-lg border border-bee-white/10 bg-bee-black text-bee-white text-sm" 
                           />
@@ -1979,13 +2204,13 @@ const AdminDashboard = ({
                       )}
                     </div>
                     <button 
-                      onClick={() => {
-                        const newHours = hours.map(item => item.day === h.day ? { ...item, is_closed: item.is_closed ? 0 : 1 } : item);
-                        fetch('/api/hours', {
-                          method: 'PUT',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ hours: newHours })
-                        }).then(() => onRefresh());
+                      onClick={async () => {
+                        const path = `business_hours/${h.day}`;
+                        try {
+                          await updateDoc(doc(db, 'business_hours', h.day), { is_closed: !h.is_closed });
+                        } catch (error) {
+                          handleFirestoreError(error, OperationType.UPDATE, path);
+                        }
                       }}
                       className="text-xs font-bold text-bee-purple hover:underline"
                     >
@@ -2023,8 +2248,12 @@ const AdminDashboard = ({
                       <button className="p-2 text-bee-white/30 hover:text-bee-purple" onClick={() => setEditingEvent(e)}><Edit2 size={18} /></button>
                       <button className="p-2 text-bee-white/30 hover:text-bee-blue" onClick={async () => {
                         if (confirm('Delete event?')) {
-                          await fetch(`/api/events/${e.id}`, { method: 'DELETE' });
-                          onRefresh();
+                          const path = `events/${e.id}`;
+                          try {
+                            await deleteDoc(doc(db, 'events', e.id));
+                          } catch (error) {
+                            handleFirestoreError(error, OperationType.DELETE, path);
+                          }
                         }
                       }}><Trash2 size={18} /></button>
                     </div>
@@ -2133,8 +2362,12 @@ const AdminDashboard = ({
                       <button 
                         onClick={async () => {
                           if (confirm('Delete this image?')) {
-                            await fetch(`/api/gallery/${img.id}`, { method: 'DELETE' });
-                            onRefresh();
+                            const path = `gallery/${img.id}`;
+                            try {
+                              await deleteDoc(doc(db, 'gallery', img.id));
+                            } catch (error) {
+                              handleFirestoreError(error, OperationType.DELETE, path);
+                            }
                           }
                         }}
                         className="p-3 bg-bee-blue text-bee-white rounded-full hover:scale-110 transition-transform"
@@ -2163,106 +2396,119 @@ export default function App() {
   const [hours, setHours] = useState<BusinessHours[]>([]);
   const [events, setEvents] = useState<SalonEvent[]>([]);
   const [gallery, setGallery] = useState<GalleryImage[]>([]);
-
-  const fetchData = async () => {
-    try {
-      const [sRes, aRes, hRes, eRes, gRes] = await Promise.all([
-        fetch('/api/services'),
-        fetch('/api/appointments'),
-        fetch('/api/hours'),
-        fetch('/api/events'),
-        fetch('/api/gallery')
-      ]);
-      
-      const results = await Promise.all([
-        sRes.json(),
-        aRes.json(),
-        hRes.json(),
-        eRes.json(),
-        gRes.json()
-      ]);
-
-      setServices(results[0]);
-      setAppointments(results[1]);
-      setHours(results[2]);
-      setEvents(results[3]);
-      setGallery(results[4]);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-    }
-  };
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchData();
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setIsAdmin(!!user);
+      setLoading(false);
+    });
 
-    // WebSocket for real-time updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'DATA_UPDATED') {
-        fetchData();
-      }
+    const unsubServices = onSnapshot(collection(db, 'services'), (snapshot) => {
+      setServices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as Service)));
+    });
+
+    const unsubHours = onSnapshot(collection(db, 'business_hours'), (snapshot) => {
+      setHours(snapshot.docs.map(doc => doc.data() as BusinessHours));
+    });
+
+    const unsubEvents = onSnapshot(collection(db, 'events'), (snapshot) => {
+      setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as SalonEvent)));
+    });
+
+    const unsubGallery = onSnapshot(collection(db, 'gallery'), (snapshot) => {
+      setGallery(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as GalleryImage)));
+    });
+
+    return () => {
+      unsubAuth();
+      unsubServices();
+      unsubHours();
+      unsubEvents();
+      unsubGallery();
     };
-
-    return () => ws.close();
   }, []);
 
-  const handleLogout = () => {
+  useEffect(() => {
+    if (!isAdmin) {
+      setAppointments([]);
+      return;
+    }
+
+    const unsubAppointments = onSnapshot(collection(db, 'appointments'), (snapshot) => {
+      setAppointments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as Appointment)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'appointments');
+    });
+
+    return () => unsubAppointments();
+  }, [isAdmin]);
+
+  const handleLogout = async () => {
+    await signOut(auth);
     setIsAdmin(false);
     setActiveTab('home');
   };
 
-  return (
-    <div className="min-h-screen flex flex-col">
-      <Navbar 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab} 
-        isAdmin={isAdmin} 
-        setIsAdmin={setIsAdmin} 
-        onLogout={handleLogout}
-      />
-      
-      <main className="flex-1">
-        <AnimatePresence mode="wait">
-          {isAdmin ? (
-            <motion.div
-              key="admin-dashboard"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <AdminDashboard 
-                services={services} 
-                appointments={appointments} 
-                hours={hours} 
-                events={events}
-                gallery={gallery}
-                onRefresh={fetchData}
-              />
-            </motion.div>
-          ) : (
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3 }}
-            >
-              {activeTab === 'home' && <HomePage onBook={() => setActiveTab('booking')} />}
-              {activeTab === 'services' && <ServicesPage services={services} />}
-              {activeTab === 'gallery' && <GalleryPage images={gallery} />}
-              {activeTab === 'booking' && <BookingPage services={services} onComplete={() => setActiveTab('home')} />}
-              {activeTab === 'events' && <EventsPage events={events} />}
-              {activeTab === 'try-it-out' && <TryItOutPage />}
-              {activeTab === 'admin' && <AdminLoginPage onLogin={() => setIsAdmin(true)} />}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </main>
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-bee-black flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-bee-purple border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
-      <Footer />
-    </div>
+  return (
+    <ErrorBoundary>
+      <div className="min-h-screen flex flex-col">
+        <Navbar 
+          activeTab={activeTab} 
+          setActiveTab={setActiveTab} 
+          isAdmin={isAdmin} 
+          setIsAdmin={setIsAdmin} 
+          onLogout={handleLogout}
+        />
+        
+        <main className="flex-1">
+          <AnimatePresence mode="wait">
+            {isAdmin ? (
+              <motion.div
+                key="admin-dashboard"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <AdminDashboard 
+                  services={services} 
+                  appointments={appointments} 
+                  hours={hours} 
+                  events={events}
+                  gallery={gallery}
+                  onRefresh={() => {}} // No-op as onSnapshot handles updates
+                />
+              </motion.div>
+            ) : (
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.3 }}
+              >
+                {activeTab === 'home' && <HomePage onBook={() => setActiveTab('booking')} />}
+                {activeTab === 'services' && <ServicesPage services={services} />}
+                {activeTab === 'gallery' && <GalleryPage images={gallery} />}
+                {activeTab === 'booking' && <BookingPage services={services} hours={hours} onComplete={() => setActiveTab('home')} />}
+                {activeTab === 'events' && <EventsPage events={events} />}
+                {activeTab === 'try-it-out' && <TryItOutPage />}
+                {activeTab === 'admin' && <AdminLoginPage onLogin={() => setIsAdmin(true)} />}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </main>
+
+        <Footer />
+      </div>
+    </ErrorBoundary>
   );
 }

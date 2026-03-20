@@ -1,0 +1,109 @@
+{
+  "entities": {
+    "Service": {
+      "title": "Service",
+      "description": "A salon service offered to clients.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the service" },
+        "price": { "type": "number", "description": "Price of the service" },
+        "duration": { "type": "string", "description": "Duration of the service (e.g., '30 mins')" },
+        "description": { "type": "string", "description": "Description of the service" }
+      },
+      "required": ["name", "price"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "A booking made by a client.",
+      "type": "object",
+      "properties": {
+        "client_name": { "type": "string", "description": "Name of the client" },
+        "client_email": { "type": "string", "description": "Email of the client" },
+        "client_phone": { "type": "string", "description": "Phone number of the client" },
+        "service_id": { "type": "string", "description": "ID of the primary service" },
+        "services": { "type": "array", "items": { "type": "string" }, "description": "List of service names" },
+        "duration": { "type": "integer", "description": "Total duration in minutes" },
+        "total_price": { "type": "number", "description": "Total price of selected services" },
+        "consent": { "type": "boolean", "description": "Consent to receive communications" },
+        "date": { "type": "string", "format": "date", "description": "Date of the appointment (YYYY-MM-DD)" },
+        "time": { "type": "string", "description": "Time of the appointment (HH:mm)" },
+        "image_url": { "type": "string", "description": "Optional image URL" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "cancelled"], "description": "Status of the appointment" },
+        "notes": { "type": "string", "description": "Optional notes from the client or admin" }
+      },
+      "required": ["client_name", "client_email", "date", "time"]
+    },
+    "GalleryImage": {
+      "title": "GalleryImage",
+      "description": "An image in the salon's gallery.",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "description": "URL of the image" },
+        "caption": { "type": "string", "description": "Optional caption for the image" }
+      },
+      "required": ["url"]
+    },
+    "SalonEvent": {
+      "title": "SalonEvent",
+      "description": "A special event hosted by the salon.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Title of the event" },
+        "date": { "type": "string", "format": "date", "description": "Date of the event" },
+        "time": { "type": "string", "description": "Time of the event" },
+        "description": { "type": "string", "description": "Description of the event" },
+        "capacity": { "type": "integer", "description": "Maximum number of attendees" }
+      },
+      "required": ["title", "date", "time", "capacity"]
+    },
+    "EventRegistration": {
+      "title": "EventRegistration",
+      "description": "A registration for a salon event.",
+      "type": "object",
+      "properties": {
+        "event_id": { "type": "string", "description": "ID of the event" },
+        "name": { "type": "string", "description": "Name of the attendee" },
+        "email": { "type": "string", "description": "Email of the attendee" }
+      },
+      "required": ["event_id", "name", "email"]
+    },
+    "BusinessHours": {
+      "title": "BusinessHours",
+      "description": "Operating hours for a specific day.",
+      "type": "object",
+      "properties": {
+        "day": { "type": "string", "description": "Day of the week" },
+        "open_time": { "type": "string", "description": "Opening time (HH:mm)" },
+        "close_time": { "type": "string", "description": "Closing time (HH:mm)" },
+        "is_closed": { "type": "boolean", "description": "Whether the salon is closed on this day" }
+      },
+      "required": ["day"]
+    }
+  },
+  "firestore": {
+    "/services/{serviceId}": {
+      "schema": "Service",
+      "description": "Collection of services offered."
+    },
+    "/appointments/{appointmentId}": {
+      "schema": "Appointment",
+      "description": "Collection of client appointments."
+    },
+    "/gallery/{imageId}": {
+      "schema": "GalleryImage",
+      "description": "Collection of gallery images."
+    },
+    "/events/{eventId}": {
+      "schema": "SalonEvent",
+      "description": "Collection of salon events."
+    },
+    "/event_registrations/{registrationId}": {
+      "schema": "EventRegistration",
+      "description": "Collection of event registrations."
+    },
+    "/business_hours/{day}": {
+      "schema": "BusinessHours",
+      "description": "Collection of business hours for each day."
+    }
+  }
+}
